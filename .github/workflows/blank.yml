@@ -18,45 +18,40 @@ jobs:
     - name: Install System Dependencies
       run: |
         brew install make pkg-config sdl2 glew glfw adamstark-audiofile dylibbundler coreutils
-        pip3 install pillow
+        # Bypasses the Homebrew Python environment block completely
+        pip3 install pillow --break-system-packages
 
     - name: Set Execution Permissions
       run: |
-        # The Makefile checks for pcbuilder.sh at startup; it must be executable
         if [ -f "pcbuilder.sh" ]; then chmod +x pcbuilder.sh; fi
         if [ -d "tools" ]; then chmod +x tools/* 2>/dev/null || true; fi
 
     - name: Extract Game Assets
       run: |
-        # The script checks for the baserom you added to pull textures/audio
         if [ -f "baserom.us.z64" ]; then
           python3 ./extract_assets.py us || true
+        else
+          echo "⚠️ Warning: baserom.us.z64 not found in workspace directory."
         fi
 
     - name: Compile Engine via GNU Make
       run: |
-        # Forces execution using the macOS GNU compiler tools (gmake)
-        # Bypasses the default PC builder check loop if it throws an environment error
         gmake OSX_BUILD=1 DEBUG=0 NON_MATCHING=1 COMPARE=0 -j$(sysctl -n hw.ncpu)
 
     - name: Assemble Mobile IPA Container
       run: |
         mkdir -p build/Payload
         
-        # Locates the compiled binary executable inside the build target folder (build/us_pc/)
         TARGET_BIN=$(find build/us_pc/ -type f -not -name "*.*" -not -name "%.*" | head -n 1)
         
         if [ -n "$TARGET_BIN" ]; then
           echo "Found compiled application runtime asset: $TARGET_BIN"
           
-          # Create the required structural iOS .app folder framework
           mkdir -p build/Payload/Saturn.app
           cp "$TARGET_BIN" build/Payload/Saturn.app/Saturn
           
-          # Inject game assets folder if required by the asset manager
           if [ -d "res" ]; then cp -r res build/Payload/Saturn.app/; fi
           
-          # Compress everything into the final installer container
           cd build
           zip -r Saturn.ipa Payload
           mkdir -p output
