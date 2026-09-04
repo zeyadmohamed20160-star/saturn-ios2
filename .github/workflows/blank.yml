@@ -1,0 +1,52 @@
+name: Build Saturn IPA
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch: # Allows you to trigger the build manually
+
+jobs:
+  build:
+    # Specifies the use of a GitHub-hosted macOS environment
+    runs-on: macos-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Xcode version
+      # Optional: Specify a precise Xcode version if needed
+      run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+
+    - name: Install dependencies
+      # If your project uses CocoaPods, Swift Package Manager, or Carthage
+      run: |
+        if [ -f "Podfile" ]; then
+          pod install
+        fi
+
+    - name: Build Archive
+      # Compiles the project and creates an archive (.xcarchive)
+      run: |
+        xcodebuild archive \
+          -scheme "Saturn" \
+          -archivePath build/Saturn.xcarchive \
+          -allowProvisioningUpdates
+
+    - name: Export IPA
+      # Exports the archive into an .ipa file using your export options
+      run: |
+        xcodebuild -exportArchive \
+          -archivePath build/Saturn.xcarchive \
+          -exportPath build/output \
+          -exportOptionsPlist ExportOptions.plist \
+          -allowProvisioningUpdates
+
+    - name: Upload IPA Artifact
+      # Uploads the finished .ipa file so you can download it from GitHub
+      uses: actions/artifacts@v4
+      with:
+        name: Saturn-IPA
+        path: build/output/*.ipa
