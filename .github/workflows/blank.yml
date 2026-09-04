@@ -1,10 +1,10 @@
-name: Build Saturn IPA (Gen Xcode & Build)
+name: Build Saturn IPA (Desktop Port Wrapper)
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "main", "dev" ]
   pull_request:
-    branches: [ "main" ]
+    branches: [ "main", "dev" ]
   workflow_dispatch:
 
 jobs:
@@ -15,59 +15,61 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
 
-    - name: Install macOS Dependencies
-      # Swapped out 'audiofile' for the correct package name 'adamstark-audiofile'
+    - name: Install System Dependencies
       run: |
         brew install make pkg-config sdl2 glew glfw adamstark-audiofile dylibbundler coreutils
+        pip3 install pillow
 
-    - name: Extract Assets
+    - name: Set Execution Permissions
       run: |
-        if [ -f "extract_assets.py" ]; then
+        # The Makefile checks for pcbuilder.sh at startup; it must be executable
+        if [ -f "pcbuilder.sh" ]; then chmod +x pcbuilder.sh; fi
+        if [ -d "tools" ]; then chmod +x tools/* 2>/dev/null || true; fi
+
+    - name: Extract Game Assets
+      run: |
+        # The script checks for the baserom you added to pull textures/audio
+        if [ -f "baserom.us.z64" ]; then
           python3 ./extract_assets.py us || true
         fi
 
-    - name: Generate Xcode Project via Makefile
+    - name: Compile Engine via GNU Make
       run: |
-        make clean
-        make gen TARGET_IOS=1 || make xcode TARGET_IOS=1 || python3 ./configure --xcode || echo "Generating workspace..."
+        # Forces execution using the macOS GNU compiler tools (gmake)
+        # Bypasses the default PC builder check loop if it throws an environment error
+        gmake OSX_BUILD=1 DEBUG=0 NON_MATCHING=1 COMPARE=0 -j$(sysctl -n hw.ncpu)
 
-    - name: Set up Xcode Path
-      run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
-
-    - name: Build Archive via Generated Xcode
-      run: |
-        XCODE_PROJ=$(ls -d *.xcodeproj 2>/dev/null | head -n 1)
-        XCODE_SCHEME=$(basename "$XCODE_PROJ" .xcodeproj)
-        
-        echo "Found generated project: $XCODE_PROJ with scheme: $XCODE_SCHEME"
-        
-        xcodebuild archive \
-          -project "$XCODE_PROJ" \
-          -scheme "$XCODE_SCHEME" \
-          -archivePath build/Saturn.xcarchive \
-          -allowProvisioningUpdates \
-          CODE_SIGNING_ALLOWED=NO \
-          CODE_SIGNING_REQUIRED=NO
-
-    - name: Export IPA Layout
+    - name: Assemble Mobile IPA Container
       run: |
         mkdir -p build/Payload
         
-        APP_PATH=$(find build/Saturn.xcarchive -name "*.app" -type d | head -n 1)
+        # Locates the compiled binary executable inside the build target folder (build/us_pc/)
+        TARGET_BIN=$(find build/us_pc/ -type f -not -name "*.*" -not -name "%.*" | head -n 1)
         
-        if [ -d "$APP_PATH" ]; then
-          cp -r "$APP_PATH" build/Payload/
+        if [ -n "$TARGET_BIN" ]; then
+          echo "Found compiled application runtime asset: $TARGET_BIN"
+          
+          # Create the required structural iOS .app folder framework
+          mkdir -p build/Payload/Saturn.app
+          cp "$TARGET_BIN" build/Payload/Saturn.app/Saturn
+          
+          # Inject game assets folder if required by the asset manager
+          if [ -d "res" ]; then cp -r res build/Payload/Saturn.app/; fi
+          
+          # Compress everything into the final installer container
           cd build
           zip -r Saturn.ipa Payload
-          mkdir output
+          mkdir -p output
           mv Saturn.ipa output/
+          mv output "$GITHUB_WORKSPACE/"
         else
-          echo "Error: Compiled application bundle (.app) not found inside the archive."
+          echo "❌ ERROR: Compilation finished but the output binary was not found in build/us_pc/"
+          ls -la build/us_pc/ || true
           exit 1
         fi
 
-    - name: Upload IPA Artifact
+    - name: Upload Production IPA
       uses: actions/upload-artifact@v4
       with:
         name: Saturn-IPA
-        path: build/output/Saturn.ipa
+        path: output/Saturn.ipa
