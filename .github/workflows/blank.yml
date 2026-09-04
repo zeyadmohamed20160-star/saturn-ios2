@@ -46,7 +46,7 @@ jobs:
 
     - name: Upload IPA Artifact
       # Uploads the finished .ipa file so you can download it from GitHub
-      uses: actions/artifacts@v4
+      uses: actions/upload-artifact@v4
       with:
         name: Saturn-IPA
         path: build/output/*.ipa
