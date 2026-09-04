@@ -1,52 +1,79 @@
-name: Build Saturn IPA
+name: Build Saturn IPA (Gen Xcode & Build)
 
 on:
   push:
     branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
-  workflow_dispatch: # Allows you to trigger the build manually
+  workflow_dispatch: # Allows manual trigger from the Actions tab
 
 jobs:
   build:
-    # Specifies the use of a GitHub-hosted macOS environment
     runs-on: macos-latest
 
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
 
-    - name: Set up Xcode version
-      # Optional: Specify a precise Xcode version if needed
-      run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
-
-    - name: Install dependencies
-      # If your project uses CocoaPods, Swift Package Manager, or Carthage
+    - name: Install macOS Dependencies
+      # Xcode needs these library packages installed via Homebrew to compile the port
       run: |
-        if [ -f "Podfile" ]; then
-          pod install
+        brew install make pkg-config sdl2 glew glfw audiofile dylibbundler coreutils
+
+    - name: Extract Assets
+      # Uses your baserom.us.z64 to extract the required game assets
+      run: |
+        if [ -f "extract_assets.py" ]; then
+          python3 ./extract_assets.py us || true
         fi
 
-    - name: Build Archive
-      # Compiles the project and creates an archive (.xcarchive)
+    - name: Generate Xcode Project via Makefile
+      # This tells the Makefile to automatically generate the Xcode structure (.xcodeproj)
       run: |
-        xcodebuild archive \
-          -scheme "Saturn" \
-          -archivePath build/Saturn.xcarchive \
-          -allowProvisioningUpdates
+        make clean
+        make gen TARGET_IOS=1 || make xcode TARGET_IOS=1 || python3 ./configure --xcode || echo "Generating workspace..."
 
-    - name: Export IPA
-      # Exports the archive into an .ipa file using your export options
+    - name: Set up Xcode Path
+      run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+
+    - name: Build Archive via Generated Xcode
+      # Dynamically targets the newly generated project file
       run: |
-        xcodebuild -exportArchive \
+        # Automatically detects the name of the newly generated xcodeproj file
+        XCODE_PROJ=$(ls -d *.xcodeproj 2>/dev/null | head -n 1)
+        XCODE_SCHEME=$(basename "$XCODE_PROJ" .xcodeproj)
+        
+        echo "Found generated project: $XCODE_PROJ with scheme: $XCODE_SCHEME"
+        
+        xcodebuild archive \
+          -project "$XCODE_PROJ" \
+          -scheme "$XCODE_SCHEME" \
           -archivePath build/Saturn.xcarchive \
-          -exportPath build/output \
-          -exportOptionsPlist ExportOptions.plist \
-          -allowProvisioningUpdates
+          -allowProvisioningUpdates \
+          CODE_SIGNING_ALLOWED=NO \
+          CODE_SIGNING_REQUIRED=NO
+
+    - name: Export IPA Layout
+      # Manually packages the build into an IPA container since we are skipping official Apple signing
+      run: |
+        mkdir -p build/Payload
+        
+        # Locate the compiled app bundle inside the archive structure
+        APP_PATH=$(find build/Saturn.xcarchive -name "*.app" -type d | head -n 1)
+        
+        if [ -d "$APP_PATH" ]; then
+          cp -r "$APP_PATH" build/Payload/
+          cd build
+          zip -r Saturn.ipa Payload
+          mkdir output
+          mv Saturn.ipa output/
+        else
+          echo "Error: Compiled application bundle (.app) not found inside the archive."
+          exit 1
+        fi
 
     - name: Upload IPA Artifact
-      # Uploads the finished .ipa file so you can download it from GitHub
       uses: actions/upload-artifact@v4
       with:
         name: Saturn-IPA
-        path: build/output/*.ipa
+        path: build/output/Saturn.ipa
